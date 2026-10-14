@@ -91,6 +91,7 @@ void sctp_onmessage(Sctp* sctp, void (*callback)(char*, size_t, void*, uint16_t)
 int sctp_is_connected(Sctp* sctp) { (void)sctp; return 1; }
 uint32_t ports_get_epoch_time(void) { return 1; }
 uint32_t ports_get_monotonic_time(void) { return 1; }
+uint64_t ports_get_monotonic_time_us(void) { return 1; }
 int addr_to_string(const Address* address, char* buffer, size_t size) {
   (void)address;
   if (size) buffer[0] = 0;
@@ -99,6 +100,10 @@ int addr_to_string(const Address* address, char* buffer, size_t size) {
 int agent_select_candidate_pair(Agent* agent) { (void)agent; abort(); }
 int agent_connectivity_check(Agent* agent) { (void)agent; abort(); }
 int agent_fail_nominated_remote(Agent* agent) { (void)agent; abort(); }
+static int consent_checks;
+int agent_maybe_send_consent_request(Agent* agent, uint32_t now_ms) {
+  (void)agent; (void)now_ms; ++consent_checks; return 0;
+}
 int dtls_srtp_handshake(DtlsSrtp* dtls, Address* address) {
   (void)dtls; (void)address; return next_handshake_result;
 }
@@ -308,8 +313,10 @@ int main(void) {
   next_dtls_result = MBEDTLS_ERR_SSL_WANT_READ;
   assert(peer_connection_loop(peer) == 1);
   assert(dtls_reads == 5 && !peer->dtls_pending);
+  const int consent_checks_before_idle_loop = consent_checks;
   assert(peer_connection_loop(peer) == 0);
   assert(dtls_reads == 5 && socket_reads == 4);
+  assert(consent_checks == consent_checks_before_idle_loop + 1);
 
   memcpy(socket_packet, "\x80\x60\x00\x02\x00\x00\x00\x00\x00\x00\x00\x2a\x65\x80", 14);
   socket_size = 14;

@@ -1,6 +1,8 @@
+#include <errno.h>
 #include <inttypes.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -15,6 +17,7 @@
 #include "rtp.h"
 #include "sctp.h"
 #include "sdp.h"
+#include "twcc.h"
 
 #define STATE_CHANGED(pc, curr_state)                                  \
   if (pc->state != curr_state) {                                       \
@@ -61,6 +64,8 @@ struct PeerConnection {
   uint32_t video_nack_requests;
   uint32_t video_nack_packets_requested;
   RtcpReceiverStats video_receiver_stats;
+  TwccReceiver twcc;
+  uint32_t twcc_send_failures;
 
   int dtls_handshake_attempts;
   uint32_t dtls_handshake_started_ms;
@@ -78,7 +83,14 @@ struct PeerConnection {
 static int peer_connection_send_rtcp_nack(PeerConnection* pc, uint32_t ssrc,
                                           uint16_t packet_id, uint16_t bitmask);
 
-static int peer_connection_diagnostics_enabled;
+static atomic_int peer_connection_diagnostics_enabled;
+typedef void (*PeerDiagnosticCallback)(const char*);
+static _Atomic(PeerDiagnosticCallback) peer_diagnostic_callback;
+
+void peer_connection_set_diagnostic_callback(void (*callback)(const char*)) {
+  atomic_store(&peer_diagnostic_callback, callback);
+  sctp_set_diagnostic_callback(callback);
+}
 
 void peer_connection_set_diagnostics_enabled(int enabled) {
   peer_connection_diagnostics_enabled = enabled != 0;
@@ -88,54 +100,17 @@ void peer_connection_set_diagnostics_enabled(int enabled) {
 static void peer_connection_diag_log(const char* fmt, ...) {
   if (!peer_connection_diagnostics_enabled)
     return;
-  FILE* file = fopen("sdmc:/switch/OpenNOWSwitch/signaling.log", "a");
-  FILE* trace = fopen("sdmc:/switch/OpenNOWSwitch/stream_trace.log", "a");
-  const int input_relevant = strstr(fmt, "sctp") != NULL ||
-                             strstr(fmt, "dtls") != NULL ||
-                             strstr(fmt, "transport_completed") != NULL;
-  FILE* input = input_relevant ? fopen("sdmc:/switch/OpenNOWSwitch/input.log", "a") : NULL;
-
-  if (file) {
-    fputs("LIBPEER ", file);
-  }
-  if (trace) {
-    fputs("LIBPEER ", trace);
-  }
-  if (input) {
-    fputs("LIBPEER ", input);
-  }
-
+  PeerDiagnosticCallback callback = atomic_load(&peer_diagnostic_callback);
+  if (!callback)
+    return;
+  const int saved_errno = errno;
+  char message[2048] = "LIBPEER ";
   va_list args;
   va_start(args, fmt);
-  if (file) {
-    va_list copy;
-    va_copy(copy, args);
-    vfprintf(file, fmt, copy);
-    va_end(copy);
-  }
-  if (trace) {
-    va_list copy;
-    va_copy(copy, args);
-    vfprintf(trace, fmt, copy);
-    va_end(copy);
-  }
-  if (input) {
-    vfprintf(input, fmt, args);
-  }
+  vsnprintf(message + 8, sizeof(message) - 8, fmt, args);
   va_end(args);
-
-  if (file) {
-    fputc('\n', file);
-    fclose(file);
-  }
-  if (trace) {
-    fputc('\n', trace);
-    fclose(trace);
-  }
-  if (input) {
-    fputc('\n', input);
-    fclose(input);
-  }
+  callback(message);
+  errno = saved_errno;
 }
 
 static int peer_connection_video_packet_buffered(const RtpDecoder* decoder,
@@ -429,6 +404,30 @@ static void peer_connection_maybe_send_receiver_report(PeerConnection* pc) {
   if (size > 0 && dtls_srtp_encrypt_rctp_packet(&pc->dtls_srtp, packet, &size) == 0)
     success = agent_send(&pc->agent, packet, size) == size;
   rtcp_receiver_report_sent(&pc->video_receiver_stats, now_ms, success);
+}
+
+static void peer_connection_maybe_send_transport_feedback(PeerConnection* pc) {
+  const uint64_t now_us = ports_get_monotonic_time_us();
+  if (pc->state != PEER_CONNECTION_COMPLETED || !twcc_receiver_feedback_due(&pc->twcc, now_us))
+    return;
+  for (int i = 0; i < 4; i++) {
+    uint8_t packet[TWCC_MAX_FEEDBACK_SIZE + 32];
+    int size = twcc_receiver_build_feedback(&pc->twcc, pc->vrtp_encoder.ssrc,
+                                            packet, TWCC_MAX_FEEDBACK_SIZE);
+    if (size <= 0)
+      break;
+    if (dtls_srtp_encrypt_rctp_packet(&pc->dtls_srtp, packet, &size) != 0 ||
+        agent_send(&pc->agent, packet, size) != size) {
+      pc->twcc_send_failures++;
+      break;
+    }
+  }
+  twcc_receiver_feedback_sent(&pc->twcc, now_us);
+  if (pc->twcc.feedback_sent <= 3 || pc->twcc.feedback_sent % 1200 == 0) {
+    peer_connection_diag_log("twcc_feedback sent=%" PRIu32 " recorded=%" PRIu32 " late=%" PRIu32 " failures=%" PRIu32,
+                             pc->twcc.feedback_sent, pc->twcc.packets_recorded,
+                             pc->twcc.late_packets, pc->twcc_send_failures);
+  }
 }
 
 const char* peer_connection_state_to_string(PeerConnectionState state) {
@@ -736,6 +735,7 @@ int peer_connection_loop(PeerConnection* pc) {
           break;
       }
       if ((pc->agent_ret = agent_recv_nonblocking(&pc->agent, pc->agent_buf, sizeof(pc->agent_buf))) > 0) {
+        const uint64_t arrival_us = ports_get_monotonic_time_us();
         packet_processed = 1;
         LOGD("agent_recv %d", pc->agent_ret);
         pc->completed_udp_packets++;
@@ -796,6 +796,7 @@ int peer_connection_loop(PeerConnection* pc) {
             break;
           }
 
+          twcc_receiver_record(&pc->twcc, pc->agent_buf, pc->agent_ret, arrival_us);
           ssrc = rtp_get_ssrc(pc->agent_buf);
           RtpPacket* rtp = (RtpPacket*)pc->agent_buf;
           const int is_audio_payload = rtp->header.type == PT_PCMU ||
@@ -867,8 +868,19 @@ int peer_connection_loop(PeerConnection* pc) {
         LOGI("binding request timeout; keeping completed transport alive");
         pc->agent.binding_request_time = ports_get_epoch_time();
       }
+      int consent_ret = agent_maybe_send_consent_request(&pc->agent, ports_get_epoch_time());
+      if (consent_ret != 0 &&
+          (pc->agent.consent_attempts <= 3 || pc->agent.consent_attempts % 24 == 0 || consent_ret < 0)) {
+        peer_connection_diag_log("ice_consent ret=%d attempts=%" PRIu32 " sent=%" PRIu32 " responses=%" PRIu32 " rttMs=%" PRIu32,
+                                 consent_ret,
+                                 pc->agent.consent_attempts,
+                                 pc->agent.consent_requests_sent,
+                                 pc->agent.binding_responses_received,
+                                 pc->agent.smoothed_binding_rtt_ms);
+      }
       rtp_decoder_poll(&pc->vrtp_decoder);
       peer_connection_maybe_send_receiver_report(pc);
+      peer_connection_maybe_send_transport_feedback(pc);
 
       break;
     case PEER_CONNECTION_FAILED:
@@ -916,6 +928,12 @@ void peer_connection_set_remote_description(PeerConnection* pc, const char* sdp,
         strlen(agent->remote_ufrag) != 0 &&
         (strncmp(buf + strlen("a=ice-ufrag:"), agent->remote_ufrag, strlen(agent->remote_ufrag)) == 0)) {
       is_update = 1;
+    }
+
+    const int twcc_extension_id = twcc_parse_extension_id(buf);
+    if (twcc_extension_id > 0 && pc->twcc.extension_id == 0) {
+      twcc_receiver_init(&pc->twcc, (uint8_t)twcc_extension_id);
+      peer_connection_diag_log("twcc_extension id=%d", twcc_extension_id);
     }
 
     if (strstr(buf, "m=video")) {

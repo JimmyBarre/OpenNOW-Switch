@@ -393,7 +393,6 @@ std::string BuildSessionBody(
     json_object_set_new(features, "maxBitrateKbps", json_integer(stream_settings.bitrate_kbps));
     json_object_set_new(features, "codec", json_integer(1));
     json_object_set_new(features, "vsync", json_false());
-    json_object_set_new(features, "dynamicStreamingMode", json_integer(3));
     json_object_set_new(features, "audioChannelCount", json_integer(2));
     json_object_set_new(req, "requestedStreamingFeatures", features);
 
@@ -426,7 +425,6 @@ std::string CreateNetworkTestSession(
     const HttpClient& http_client,
     const std::string& streaming_base_url,
     const std::vector<std::string>& headers,
-    const std::string& proxy_url,
     const StreamSettings& stream_settings)
 {
     JsonPtr root(json_object(), &json_decref);
@@ -444,8 +442,7 @@ std::string CreateNetworkTestSession(
         streaming_base_url + "v2/nettestsession",
         GfnClient::kUserAgent,
         headers,
-        DumpJson(root.get()),
-        proxy_url);
+        DumpJson(root.get()));
     if (response.status_code < 200 || response.status_code >= 300)
         return {};
 

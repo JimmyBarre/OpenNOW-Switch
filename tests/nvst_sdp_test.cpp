@@ -37,13 +37,16 @@ int main()
 
     for (const auto& line : {
         "a=video.maxFPS:60",
-        "a=video.initialBitrateKbps:4000",
-        "a=video.initialPeakBitrateKbps:4000",
+        "a=video.initialBitrateKbps:12000",
+        "a=video.initialPeakBitrateKbps:12000",
         "a=vqos.bw.maximumBitrateKbps:12000",
         "a=vqos.bw.minimumBitrateKbps:4000",
-        "a=vqos.dynamicStreamingMode:3",
-        "a=vqos.drc.enable:1",
-        "a=vqos.resControl.cpmRtc.featureMask:3",
+        "a=vqos.dynamicStreamingMode:0",
+        "a=vqos.drc.enable:0",
+        "a=vqos.resControl.cpmRtc.featureMask:0",
+        "a=vqos.resControl.cpmRtc.enable:0",
+        "a=vqos.resControl.cpmRtc.minResolutionPercent:100",
+        "a=vqos.resControl.cpmRtc.resolutionChangeHoldonMs:999999",
     }) {
         assert(HasLine(sdp, line));
     }
@@ -57,9 +60,6 @@ int main()
         "vqos.grc.enable:",
         "vqos.dfc.enable:",
         "vqos.dfc.adjustResAndFps:",
-        "vqos.resControl.cpmRtc.enable:",
-        "vqos.resControl.cpmRtc.minResolutionPercent:",
-        "vqos.resControl.cpmRtc.resolutionChangeHoldonMs:",
     }) {
         assert(!HasAttribute(sdp, attribute));
     }
@@ -67,7 +67,7 @@ int main()
     settings.bitrate_kbps = 20000;
     const std::string quality_sdp = opennow::webrtc::BuildNvstSdp(
         answer, settings, opennow::webrtc::RiInputCapabilities {});
-    assert(HasLine(quality_sdp, "a=video.initialBitrateKbps:5000"));
+    assert(HasLine(quality_sdp, "a=video.initialBitrateKbps:20000"));
     assert(HasLine(quality_sdp, "a=vqos.bw.maximumBitrateKbps:20000"));
     return 0;
 }

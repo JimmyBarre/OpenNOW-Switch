@@ -42,7 +42,6 @@ std::string BuildNvstSdp(
     const std::string fingerprint = ExtractSdpValue(answer_sdp, "a=fingerprint:sha-256 ");
     const auto tuning = video::ResolveQualityTuning(settings.image_quality_mode);
     const int max_bitrate = std::max(kOfficialMinimumBitrateKbps, settings.bitrate_kbps);
-    const int initial_bitrate = std::max(kOfficialMinimumBitrateKbps, max_bitrate / 4);
 
     const std::vector<std::string> lines = {
         "v=0",
@@ -60,9 +59,9 @@ std::string BuildNvstSdp(
         "a=vqos.fec.repairMinPercent:" + std::to_string(tuning.fec_repair_min_percent),
         "a=vqos.fec.repairPercent:" + std::to_string(tuning.fec_repair_percent),
         "a=vqos.fec.repairMaxPercent:" + std::to_string(tuning.fec_repair_max_percent),
-        "a=vqos.dynamicStreamingMode:3",
+        "a=vqos.dynamicStreamingMode:0",
         "a=vqos.bllFec.enable:0",
-        "a=vqos.drc.enable:1",
+        "a=vqos.drc.enable:0",
         "a=video.dx9EnableNv12:1",
         "a=video.dx9EnableHdr:1",
         "a=vqos.qpg.enable:1",
@@ -77,7 +76,10 @@ std::string BuildNvstSdp(
         "a=vqos.adjustStreamingFpsDuringOutOfFocus:1",
         "a=vqos.resControl.cpmRtc.ignoreOutOfFocusWindowState:1",
         "a=vqos.resControl.perfHistory.rtcIgnoreOutOfFocusWindowState:1",
-        "a=vqos.resControl.cpmRtc.featureMask:3",
+        "a=vqos.resControl.cpmRtc.featureMask:0",
+        "a=vqos.resControl.cpmRtc.enable:0",
+        "a=vqos.resControl.cpmRtc.minResolutionPercent:100",
+        "a=vqos.resControl.cpmRtc.resolutionChangeHoldonMs:999999",
         "a=packetPacing.numGroups:" + std::to_string(tuning.pacing_groups),
         "a=packetPacing.maxDelayUs:" + std::to_string(tuning.pacing_max_delay_us),
         "a=packetPacing.minNumPacketsFrame:10",
@@ -87,8 +89,8 @@ std::string BuildNvstSdp(
         "a=video.clientViewportWd:" + std::to_string(settings.width),
         "a=video.clientViewportHt:" + std::to_string(settings.height),
         "a=video.maxFPS:" + std::to_string(settings.fps),
-        "a=video.initialBitrateKbps:" + std::to_string(initial_bitrate),
-        "a=video.initialPeakBitrateKbps:" + std::to_string(initial_bitrate),
+        "a=video.initialBitrateKbps:" + std::to_string(max_bitrate),
+        "a=video.initialPeakBitrateKbps:" + std::to_string(max_bitrate),
         "a=vqos.bw.maximumBitrateKbps:" + std::to_string(max_bitrate),
         "a=vqos.bw.minimumBitrateKbps:" + std::to_string(kOfficialMinimumBitrateKbps),
         "a=video.maxNumReferenceFrames:4",
