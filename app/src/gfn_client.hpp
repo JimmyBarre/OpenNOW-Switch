@@ -67,6 +67,15 @@ class GfnClient
         "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36 "
         "NVIDIACEFClient/HEAD/debb5919f6 GFN-PC/2.0.80.173";
 
+    // Since 2026-10-27 CloudMatch picks the rig's streamer from the request
+    // headers. The legacy NATIVE / NVIDIA-CLASSIC identity now gets a classic
+    // RTSP streamer that never joins WebRTC signaling (no SDP offer), so
+    // session create/poll/stop present the GeForce NOW web client instead.
+    static constexpr const char* kCloudMatchClientVersion = "2.0.89.154";
+    static constexpr const char* kCloudMatchUserAgent =
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36";
+
   private:
     HttpClient http_client_;
     std::string client_id_;
